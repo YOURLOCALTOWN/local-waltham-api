@@ -70,7 +70,8 @@ export default async function handler(req, res) {
     const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
     let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && inScope(e.tags));
     if (named.length < 4) named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags));
-    named.sort((a, b) => (hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0));
+    const prio = (t) => { const ty = typeOf(t); return (ty === "funeral_directors" || ty === "florist") ? 1 : 0; };
+    named.sort((a, b) => (prio(b.tags) - prio(a.tags)) || ((hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0)));
 
     const seenName = {}, seenType = {}, picks = [];
     for (const pass of [1, 2]) {
