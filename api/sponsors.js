@@ -1,4 +1,4 @@
-export default async function handler(req, res) {
+const q = '[out:json][timeout:25];(nwr["shop"]["name"](around:13000,'+lat+','+lng+');nwr["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream|cinema|theatre"]["name"](around:13000,'+lat+','+lng+'););out center 250;';export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET");
 
