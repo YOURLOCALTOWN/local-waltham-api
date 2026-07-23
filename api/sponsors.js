@@ -8,20 +8,41 @@ export default async function handler(req, res) {
     const lng = parseFloat(req.query.lng);
     if (isNaN(lat) || isNaN(lng)) return res.status(200).json({ town, sponsors: [] });
 
+    let radius = parseInt(req.query.radius, 10);
+    if (isNaN(radius)) radius = 6000;
+    radius = Math.min(80000, Math.max(3000, radius));
+
+    const norm = (s) => (s || "").trim().toLowerCase();
+    const townSet = (req.query.towns || town).toString().split("|").map(norm).filter(Boolean);
+
     const cats = {
       bakery:["bakery,pastry","Bakery"], cafe:["cafe,coffee","Cafe"], coffee:["cafe,coffee","Coffee"],
-      restaurant:["restaurant,food","Restaurant"], fast_food:["restaurant,food","Eatery"],
+      restaurant:["restaurant,food","Restaurant"], fast_food:["restaurant,food","Eatery"], deli:["deli,sandwich","Deli"], ice_cream:["ice cream,dessert","Ice Cream"],
       bar:["bar,pub","Bar"], pub:["bar,pub","Pub"], pharmacy:["pharmacy","Pharmacy"],
-      florist:["flowers,florist","Florist"], hairdresser:["salon,hair","Salon"], beauty:["salon,spa","Beauty"],
+      florist:["flowers,florist","Florist"], hairdresser:["salon,hair","Salon"], beauty:["salon,spa","Beauty"], barber:["barber,haircut","Barber"],
       books:["bookstore","Bookshop"], hardware:["hardware,tools","Hardware"], doityourself:["hardware,tools","Hardware"],
-      bicycle:["bicycle,shop","Bike Shop"], butcher:["butcher,meat","Butcher"], greengrocer:["grocery,produce","Grocer"],
-      convenience:["store,shop","Market"], clothes:["clothing,boutique","Boutique"], jewelry:["jewelry","Jeweler"],
-      car_repair:["auto,garage","Auto Repair"], gym:["gym,fitness","Fitness"], deli:["deli,sandwich","Deli"], ice_cream:["ice cream,dessert","Ice Cream"],
+      bicycle:["bicycle,shop","Bike Shop"], butcher:["butcher,meat","Butcher"], greengrocer:["grocery,produce","Grocer"], supermarket:["grocery,market","Market"],
+      convenience:["store,shop","Market"], clothes:["clothing,boutique","Boutique"], shoes:["shoes,store","Shoe Store"], jewelry:["jewelry","Jeweler"],
+      car_repair:["auto,garage","Auto Repair"], car:["car,dealer","Auto"], tyres:["tires,auto","Tire Shop"], gym:["gym,fitness","Fitness"],
+      funeral_directors:["flowers,memorial","Funeral Home"], pet:["pet,supplies","Pet Store"], toys:["toys,store","Toy Store"],
+      dentist:["dental,office","Dentist"], doctors:["medical,clinic","Doctor"], clinic:["medical,clinic","Clinic"], optician:["eyewear,optical","Optician"],
+      veterinary:["veterinary,animal","Veterinary"], childcare:["childcare,kids","Childcare"], kindergarten:["childcare,kids","Preschool"],
+      lawyer:["law,office","Law Office"], insurance:["insurance,office","Insurance"], accountant:["accounting,office","Accountant"],
+      estate_agent:["real estate,office","Real Estate"], financial:["finance,office","Financial"], travel_agency:["travel,agency","Travel"],
+      electrician:["electrician,tools","Electrician"], plumber:["plumbing,tools","Plumber"], hvac:["hvac,repair","Heating & Cooling"],
+      carpenter:["carpentry,wood","Carpenter"], painter:["painting,home","Painter"], photographer:["photography,studio","Photographer"],
     };
     const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
-    const CHAINS = /(mcdonald|starbucks|dunkin|subway|burger king|wendy|domino|pizza hut|taco bell|kfc|chipotle|panera|five guys|chick-fil|popeyes|arby|cvs|walgreens|rite aid|walmart|target|costco|home depot|7-?eleven|circle k|shell|mobil|exxon|citgo|sunoco|bank of america|chase|wells fargo|citizens bank|td bank|santander|dollar |family dollar|gamestop|verizon|t-mobile|planet fitness|ups store|fedex|autozone|advance auto|jiffy lube|supercuts|great clips|petco|petsmart|staples|marshalls|old navy|panda express|wingstop|jersey mike|sonic|dairy queen|baskin|cumberland farms|stop & shop)/i;
+    const CHAINS = /(mcdonald|starbucks|dunkin|subway|burger king|wendy|domino|pizza hut|taco bell|kfc|chipotle|panera|five guys|chick-fil|popeyes|arby|cvs|walgreens|rite aid|walmart|target|costco|home depot|7-?eleven|circle k|shell|mobil|exxon|citgo|sunoco|bank of america|chase|wells fargo|citizens bank|td bank|santander|dollar |family dollar|gamestop|verizon|t-mobile|planet fitness|ups store|fedex|autozone|advance auto|jiffy lube|supercuts|great clips|petco|petsmart|staples|marshalls|old navy|panda express|wingstop|jersey mike|sonic|dairy queen|baskin|cumberland farms|stop & shop|midas|meineke|firestone|jackson hewitt|h&r block|geico|state farm|allstate|edward jones)/i;
 
-    const q = '[out:json][timeout:12];(node["shop"]["name"](around:6000,'+lat+','+lng+');node["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream"]["name"](around:6000,'+lat+','+lng+'););out 150;';
+    const R = radius;
+    const q = '[out:json][timeout:14];('
+      + 'node["shop"]["name"](around:'+R+','+lat+','+lng+');'
+      + 'node["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream|pharmacy|dentist|doctors|clinic|veterinary|childcare|kindergarten"]["name"](around:'+R+','+lat+','+lng+');'
+      + 'node["office"~"lawyer|insurance|accountant|estate_agent|financial|travel_agent"]["name"](around:'+R+','+lat+','+lng+');'
+      + 'node["craft"]["name"](around:'+R+','+lat+','+lng+');'
+      + 'node["healthcare"]["name"](around:'+R+','+lat+','+lng+');'
+      + ');out 250;';
     const eps = ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter"];
 
     let j = null;
@@ -43,13 +64,13 @@ export default async function handler(req, res) {
 
     const hasWeb = (t) => !!(t.website || t["contact:website"] || t.url);
     const isChain = (t) => !!(t.brand || t["brand:wikidata"] || CHAINS.test(t.name || ""));
-    const norm = (s) => (s || "").trim().toLowerCase();
-    const inTown = (t) => {
-      if (!town) return true;
-      const w = norm(town);
-      return norm(t["addr:city"]) === w || norm(t["addr:suburb"]) === w || norm(t["addr:neighbourhood"]) === w;
+    const inScope = (t) => {
+      if (!townSet.length) return true;
+      const c = norm(t["addr:city"]), s = norm(t["addr:suburb"]), n = norm(t["addr:neighbourhood"]);
+      return townSet.includes(c) || townSet.includes(s) || townSet.includes(n);
     };
-    let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && inTown(e.tags));
+    const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
+    let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && inScope(e.tags));
     if (named.length < 4) named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags));
     named.sort((a, b) => (hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0));
 
@@ -58,17 +79,18 @@ export default async function handler(req, res) {
       for (const el of named) {
         const t = el.tags, name = t.name;
         if (seenName[name]) continue;
-        const type = (t.shop || t.amenity || "").toLowerCase();
+        const type = typeOf(t);
         if (pass === 1 && seenType[type]) continue;
         const meta = cats[type] || ["storefront,shop", cap((type || "shop").replace(/_/g, " "))];
+        const cityLabel = cap(t["addr:city"] || t["addr:suburb"] || town);
         let web = (t.website || t["contact:website"] || t.url || "").trim();
         const direct = !!web;
         if (web && !/^https?:\/\//i.test(web)) web = "https://" + web;
-        if (!web) web = "https://www.google.com/search?q=" + encodeURIComponent(name + " " + town + " " + st);
+        if (!web) web = "https://www.google.com/search?q=" + encodeURIComponent(name + " " + cityLabel + " " + st);
         let lock = 0; for (let i = 0; i < name.length; i++) lock = (lock * 31 + name.charCodeAt(i)) % 9999;
         picks.push({
-          biz: name, tag: meta[1] + " · " + town,
-          body: "A local " + meta[1].toLowerCase() + " right here in " + town + ". Tap for hours, reviews & directions.",
+          biz: name, tag: meta[1] + " · " + cityLabel,
+          body: "A local " + meta[1].toLowerCase() + " in " + cityLabel + ". Tap for hours, reviews & directions.",
           pic: meta[0], lock, cta: direct ? "Visit website" : "View business", url: web,
         });
         seenName[name] = 1; seenType[type] = 1;
