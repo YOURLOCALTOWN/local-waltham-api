@@ -28,9 +28,7 @@ export default async function handler(req, res) {
       dentist:["dental,office","Dentist"], doctors:["medical,clinic","Doctor"], clinic:["medical,clinic","Clinic"], optician:["eyewear,optical","Optician"],
       veterinary:["veterinary,animal","Veterinary"], childcare:["childcare,kids","Childcare"], kindergarten:["childcare,kids","Preschool"],
       lawyer:["law,office","Law Office"], insurance:["insurance,office","Insurance"], accountant:["accounting,office","Accountant"],
-      estate_agent:["real estate,office","Real Estate"], financial:["finance,office","Financial"], travel_agency:["travel,agency","Travel"],
-      electrician:["electrician,tools","Electrician"], plumber:["plumbing,tools","Plumber"], hvac:["hvac,repair","Heating & Cooling"],
-      carpenter:["carpentry,wood","Carpenter"], painter:["painting,home","Painter"], photographer:["photography,studio","Photographer"],
+      estate_agent:["real estate,office","Real Estate"], financial:["finance,office","Financial"], travel_agent:["travel,agency","Travel"],
     };
     const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
     const CHAINS = /(mcdonald|starbucks|dunkin|subway|burger king|wendy|domino|pizza hut|taco bell|kfc|chipotle|panera|five guys|chick-fil|popeyes|arby|cvs|walgreens|rite aid|walmart|target|costco|home depot|7-?eleven|circle k|shell|mobil|exxon|citgo|sunoco|bank of america|chase|wells fargo|citizens bank|td bank|santander|dollar |family dollar|gamestop|verizon|t-mobile|planet fitness|ups store|fedex|autozone|advance auto|jiffy lube|supercuts|great clips|petco|petsmart|staples|marshalls|old navy|panda express|wingstop|jersey mike|sonic|dairy queen|baskin|cumberland farms|stop & shop|midas|meineke|firestone|jackson hewitt|h&r block|geico|state farm|allstate|edward jones)/i;
@@ -64,7 +62,9 @@ export default async function handler(req, res) {
     const isChain = (t) => !!(t.brand || t["brand:wikidata"] || CHAINS.test(t.name || ""));
     const inScope = (t) => {
       if (!townSet.length) return true;
-      const c = norm(t["addr:city"]), s = norm(t["addr:suburb"]), n = norm(t["addr:neighbourhood"]);
+      const c = norm(t["addr:city"]);
+      if (!c) return true; // no city tag — rely on the search radius
+      const s = norm(t["addr:suburb"]), n = norm(t["addr:neighbourhood"]);
       return townSet.includes(c) || townSet.includes(s) || townSet.includes(n);
     };
     const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
