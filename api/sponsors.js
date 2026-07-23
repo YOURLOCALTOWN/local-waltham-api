@@ -19,7 +19,9 @@ export default async function handler(req, res) {
     car_repair:["auto,garage","Auto Repair"], gym:["gym,fitness","Fitness"], deli:["deli,sandwich","Deli"],
   };
   const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
-  const q = '[out:json][timeout:25];(node["shop"]["name"](around:7000,'+lat+','+lng+');node["amenity"~"restaurant|cafe|bar|pub|pharmacy|fast_food|bank|fuel"]["name"](around:7000,'+lat+','+lng+'););out 200;';
+  // common national/regional chains to exclude even when OSM lacks a brand tag
+  const CHAINS = /(mcdonald|starbucks|dunkin|subway|burger king|wendy|domino|pizza hut|taco bell|kfc|chipotle|panera|five guys|chick-fil|popeyes|arby|cvs|walgreens|rite aid|walmart|target|costco|home depot|lowe'?s|7-?eleven|circle k|shell|mobil|exxon|bp|citgo|sunoco|bank of america|chase|wells fargo|citizens bank|td bank|santander|dollar (general|tree)|family dollar|gamestop|verizon|at&t|t-mobile|planet fitness|ups store|fedex|autozone|advance auto|o'?reilly|jiffy lube|supercuts|great clips|h&r block|petco|petsmart|staples|marshalls|tj ?maxx|ross|old navy|gap|panda express|wingstop|jersey mike|sonic|dairy queen|baskin|cumberland farms)/i;
+  const q = '[out:json][timeout:25];(node["shop"]["name"](around:7000,'+lat+','+lng+');node["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream"]["name"](around:7000,'+lat+','+lng+'););out 200;';
   const eps = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 
   let j = null;
@@ -40,12 +42,14 @@ export default async function handler(req, res) {
   if (!j || !j.elements) return res.status(200).json({ town, sponsors: [] });
 
   const hasWeb = (t) => !!(t.website || t["contact:website"] || t.url);
-  const named = j.elements.filter((e) => e.tags && e.tags.name);
-  const els = named.sort((a, b) => (hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0));
+  const isChain = (t) => !!(t.brand || t["brand:wikidata"] || CHAINS.test(t.name || ""));
+  const named = j.elements
+    .filter((e) => e.tags && e.tags.name && !isChain(e.tags)) // local/independent only
+    .sort((a, b) => (hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0));
 
   const seenName = {}, seenType = {}, picks = [];
   for (const pass of [1, 2]) {
-    for (const el of els) {
+    for (const el of named) {
       const t = el.tags, name = t.name;
       if (seenName[name]) continue;
       const type = (t.shop || t.amenity || "").toLowerCase();
@@ -58,7 +62,7 @@ export default async function handler(req, res) {
       let lock = 0; for (let i = 0; i < name.length; i++) lock = (lock * 31 + name.charCodeAt(i)) % 9999;
       picks.push({
         biz: name, tag: meta[1] + " · " + town,
-        body: "Your neighborhood " + meta[1].toLowerCase() + " in " + town + ". Tap for hours, reviews & directions.",
+        body: "A local " + meta[1].toLowerCase() + " right here in " + town + ". Tap for hours, reviews & directions.",
         pic: meta[0], lock, cta: direct ? "Visit website" : "View business", url: web,
       });
       seenName[name] = 1; seenType[type] = 1;
