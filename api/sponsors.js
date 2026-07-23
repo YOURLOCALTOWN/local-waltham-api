@@ -14,6 +14,7 @@ export default async function handler(req, res) {
 
     const norm = (s) => (s || "").trim().toLowerCase();
     const townSet = (req.query.towns || town).toString().split("|").map(norm).filter(Boolean);
+    const homeT = norm(town);
 
     const cats = {
       bakery:["bakery,pastry","Bakery"], cafe:["cafe,coffee","Cafe"], coffee:["cafe,coffee","Coffee"],
@@ -60,18 +61,24 @@ export default async function handler(req, res) {
 
     const hasWeb = (t) => !!(t.website || t["contact:website"] || t.url);
     const isChain = (t) => !!(t.brand || t["brand:wikidata"] || CHAINS.test(t.name || ""));
+    const cityOf = (t) => norm(t["addr:city"] || t["addr:suburb"] || t["addr:neighbourhood"]);
     const inScope = (t) => {
       if (!townSet.length) return true;
-      const c = norm(t["addr:city"]);
+      const c = cityOf(t);
       if (!c) return true; // no city tag — rely on the search radius
-      const s = norm(t["addr:suburb"]), n = norm(t["addr:neighbourhood"]);
-      return townSet.includes(c) || townSet.includes(s) || townSet.includes(n);
+      return townSet.includes(c);
     };
+    // rank: home-town businesses first, then untagged (likely local), then other towns
+    const homeScore = (t) => { const c = cityOf(t); if (!c) return 1; return c === homeT ? 2 : 0; };
+    const prio = (t) => { const ty = (t.shop || t.amenity || t.office || "").toLowerCase(); return (ty === "funeral_directors" || ty === "florist") ? 1 : 0; };
     const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
     let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && inScope(e.tags));
     if (named.length < 4) named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags));
-    const prio = (t) => { const ty = typeOf(t); return (ty === "funeral_directors" || ty === "florist") ? 1 : 0; };
-    named.sort((a, b) => (prio(b.tags) - prio(a.tags)) || ((hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0)));
+    named.sort((a, b) =>
+      (homeScore(b.tags) - homeScore(a.tags)) ||
+      (prio(b.tags) - prio(a.tags)) ||
+      ((hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0))
+    );
 
     const seenName = {}, seenType = {}, picks = [];
     for (const pass of [1, 2]) {
