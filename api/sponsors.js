@@ -40,16 +40,14 @@ export default async function handler(req, res) {
       + 'node["shop"]["name"](around:'+R+','+lat+','+lng+');'
       + 'node["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream|pharmacy|dentist|doctors|clinic|veterinary|childcare|kindergarten"]["name"](around:'+R+','+lat+','+lng+');'
       + 'node["office"~"lawyer|insurance|accountant|estate_agent|financial|travel_agent"]["name"](around:'+R+','+lat+','+lng+');'
-      + 'node["craft"]["name"](around:'+R+','+lat+','+lng+');'
-      + 'node["healthcare"]["name"](around:'+R+','+lat+','+lng+');'
-      + ');out 250;';
+      + ');out 150;';
     const eps = ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter"];
 
     let j = null;
     for (const ep of eps) {
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 8000);
+        const timer = setTimeout(() => ctrl.abort(), 9000);
         const r = await fetch(ep, {
           method: "POST",
           body: "data=" + encodeURIComponent(q),
