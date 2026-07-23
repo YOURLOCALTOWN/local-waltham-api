@@ -25,7 +25,7 @@ export default async function handler(req, res) {
       bicycle:["bicycle,shop","Bike Shop"], butcher:["butcher,meat","Butcher"], greengrocer:["grocery,produce","Grocer"], supermarket:["grocery,market","Market"],
       convenience:["store,shop","Market"], clothes:["clothing,boutique","Boutique"], shoes:["shoes,store","Shoe Store"], jewelry:["jewelry","Jeweler"],
       car_repair:["auto,garage","Auto Repair"], car:["car,dealer","Auto"], tyres:["tires,auto","Tire Shop"], gym:["gym,fitness","Fitness"],
-      funeral_directors:["flowers,memorial","Funeral Home"], pet:["pet,supplies","Pet Store"], toys:["toys,store","Toy Store"],
+      funeral_directors:["flowers,memorial","Funeral Home"], funeral_hall:["flowers,memorial","Funeral Home"], pet:["pet,supplies","Pet Store"], toys:["toys,store","Toy Store"],
       dentist:["dental,office","Dentist"], doctors:["medical,clinic","Doctor"], clinic:["medical,clinic","Clinic"], optician:["eyewear,optical","Optician"],
       veterinary:["veterinary,animal","Veterinary"], childcare:["childcare,kids","Childcare"], kindergarten:["childcare,kids","Preschool"],
       lawyer:["law,office","Law Office"], insurance:["insurance,office","Insurance"], accountant:["accounting,office","Accountant"],
@@ -37,7 +37,7 @@ export default async function handler(req, res) {
     const R = radius;
     const q = '[out:json][timeout:14];('
       + 'node["shop"]["name"](around:'+R+','+lat+','+lng+');'
-      + 'node["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream|pharmacy|dentist|doctors|clinic|veterinary|childcare|kindergarten"]["name"](around:'+R+','+lat+','+lng+');'
+      + 'node["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream|pharmacy|dentist|doctors|clinic|veterinary|childcare|kindergarten|funeral_hall"]["name"](around:'+R+','+lat+','+lng+');'
       + 'node["office"~"lawyer|insurance|accountant|estate_agent|financial|travel_agent"]["name"](around:'+R+','+lat+','+lng+');'
       + ');out 150;';
     const eps = ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter"];
@@ -65,12 +65,11 @@ export default async function handler(req, res) {
     const inScope = (t) => {
       if (!townSet.length) return true;
       const c = cityOf(t);
-      if (!c) return true; // no city tag — rely on the search radius
+      if (!c) return true;
       return townSet.includes(c);
     };
-    // rank: home-town businesses first, then untagged (likely local), then other towns
     const homeScore = (t) => { const c = cityOf(t); if (!c) return 1; return c === homeT ? 2 : 0; };
-    const prio = (t) => { const ty = (t.shop || t.amenity || t.office || "").toLowerCase(); return (ty === "funeral_directors" || ty === "florist") ? 1 : 0; };
+    const prio = (t) => { const ty = (t.shop || t.amenity || t.office || "").toLowerCase(); return (ty === "funeral_directors" || ty === "funeral_hall" || ty === "florist") ? 1 : 0; };
     const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
     let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && inScope(e.tags));
     if (named.length < 4) named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags));
