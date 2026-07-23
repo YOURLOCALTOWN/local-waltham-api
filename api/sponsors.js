@@ -59,7 +59,8 @@ export default async function handler(req, res) {
     }
     if (!j || !j.elements) return res.status(200).json({ town, sponsors: [] });
 
-    const hasWeb = (t) => !!(t.website || t["contact:website"] || t.url);
+    const webOf = (t) => (t.website || t["contact:website"] || t.url || "").trim();
+    const hasWeb = (t) => !!webOf(t);
     const isChain = (t) => !!(t.brand || t["brand:wikidata"] || CHAINS.test(t.name || ""));
     const cityOf = (t) => norm(t["addr:city"] || t["addr:suburb"] || t["addr:neighbourhood"]);
     const inScope = (t) => {
@@ -71,12 +72,14 @@ export default async function handler(req, res) {
     const homeScore = (t) => { const c = cityOf(t); if (!c) return 1; return c === homeT ? 2 : 0; };
     const prio = (t) => { const ty = (t.shop || t.amenity || t.office || "").toLowerCase(); return (ty === "funeral_directors" || ty === "funeral_hall" || ty === "florist") ? 1 : 0; };
     const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
-    let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && inScope(e.tags));
-    if (named.length < 4) named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags));
+
+    // TRIAL RULE: only businesses with a real, direct website may appear as sponsors
+    let named = j.elements.filter((e) => e && e.tags && e.tags.name && hasWeb(e.tags) && !isChain(e.tags) && inScope(e.tags));
+    if (named.length < 3) named = j.elements.filter((e) => e && e.tags && e.tags.name && hasWeb(e.tags) && !isChain(e.tags));
     named.sort((a, b) =>
       (homeScore(b.tags) - homeScore(a.tags)) ||
       (prio(b.tags) - prio(a.tags)) ||
-      ((hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0))
+      (norm(a.tags.name) < norm(b.tags.name) ? -1 : 1)
     );
 
     const seenName = {}, seenType = {}, picks = [];
@@ -88,15 +91,13 @@ export default async function handler(req, res) {
         if (pass === 1 && seenType[type]) continue;
         const meta = cats[type] || ["storefront,shop", cap((type || "shop").replace(/_/g, " "))];
         const cityLabel = cap(t["addr:city"] || t["addr:suburb"] || town);
-        let web = (t.website || t["contact:website"] || t.url || "").trim();
-        const direct = !!web;
-        if (web && !/^https?:\/\//i.test(web)) web = "https://" + web;
-        if (!web) web = "https://www.google.com/search?q=" + encodeURIComponent(name + " " + cityLabel + " " + st);
+        let web = webOf(t);
+        if (!/^https?:\/\//i.test(web)) web = "https://" + web;
         let lock = 0; for (let i = 0; i < name.length; i++) lock = (lock * 31 + name.charCodeAt(i)) % 9999;
         picks.push({
           biz: name, tag: meta[1] + " · " + cityLabel,
-          body: "A local " + meta[1].toLowerCase() + " in " + cityLabel + ". Tap for hours, reviews & directions.",
-          pic: meta[0], lock, cta: direct ? "Visit website" : "View business", url: web,
+          body: "A local " + meta[1].toLowerCase() + " in " + cityLabel + ". Tap to visit their website.",
+          pic: meta[0], lock, cta: "Visit website", url: web,
         });
         seenName[name] = 1; seenType[type] = 1;
         if (picks.length >= 12) break;
