@@ -21,14 +21,14 @@ export default async function handler(req, res) {
     const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
     const CHAINS = /(mcdonald|starbucks|dunkin|subway|burger king|wendy|domino|pizza hut|taco bell|kfc|chipotle|panera|five guys|chick-fil|popeyes|arby|cvs|walgreens|rite aid|walmart|target|costco|home depot|7-?eleven|circle k|shell|mobil|exxon|citgo|sunoco|bank of america|chase|wells fargo|citizens bank|td bank|santander|dollar |family dollar|gamestop|verizon|t-mobile|planet fitness|ups store|fedex|autozone|advance auto|jiffy lube|supercuts|great clips|petco|petsmart|staples|marshalls|old navy|panda express|wingstop|jersey mike|sonic|dairy queen|baskin|cumberland farms|stop & shop)/i;
 
-    const q = '[out:json][timeout:8];(nwr["shop"]["name"](around:6000,'+lat+','+lng+');nwr["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream"]["name"](around:6000,'+lat+','+lng+'););out center 80;';
+    const q = '[out:json][timeout:12];(node["shop"]["name"](around:6000,'+lat+','+lng+');node["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream"]["name"](around:6000,'+lat+','+lng+'););out 150;';
     const eps = ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter"];
 
     let j = null;
     for (const ep of eps) {
       try {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 6000);
+        const timer = setTimeout(() => ctrl.abort(), 8000);
         const r = await fetch(ep, {
           method: "POST",
           body: "data=" + encodeURIComponent(q),
@@ -44,7 +44,11 @@ export default async function handler(req, res) {
     const hasWeb = (t) => !!(t.website || t["contact:website"] || t.url);
     const isChain = (t) => !!(t.brand || t["brand:wikidata"] || CHAINS.test(t.name || ""));
     const norm = (s) => (s || "").trim().toLowerCase();
-    const inTown = (t) => !town || norm(t["addr:city"]) === norm(town);
+    const inTown = (t) => {
+      if (!town) return true;
+      const w = norm(town);
+      return norm(t["addr:city"]) === w || norm(t["addr:suburb"]) === w || norm(t["addr:neighbourhood"]) === w;
+    };
     let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && inTown(e.tags));
     if (named.length < 4) named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags));
     named.sort((a, b) => (hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0));
