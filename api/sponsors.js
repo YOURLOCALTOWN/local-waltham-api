@@ -25,7 +25,9 @@ export default async function handler(req, res) {
       bicycle:["bicycle,shop","Bike Shop"], butcher:["butcher,meat","Butcher"], greengrocer:["grocery,produce","Grocer"], supermarket:["grocery,market","Market"],
       convenience:["store,shop","Market"], clothes:["clothing,boutique","Boutique"], shoes:["shoes,store","Shoe Store"], jewelry:["jewelry","Jeweler"],
       car_repair:["auto,garage","Auto Repair"], car:["car,dealer","Auto"], tyres:["tires,auto","Tire Shop"], gym:["gym,fitness","Fitness"],
-      funeral_directors:["flowers,memorial","Funeral Home"], funeral_hall:["flowers,memorial","Funeral Home"], pet:["pet,supplies","Pet Store"], toys:["toys,store","Toy Store"],
+      funeral_directors:["flowers,memorial","Funeral Home"], funeral_hall:["flowers,memorial","Funeral Home"],
+      monuments:["monument,headstone","Headstones"], gravestone:["monument,headstone","Headstones"], stonemason:["monument,headstone","Monument Maker"],
+      pet:["pet,supplies","Pet Store"], toys:["toys,store","Toy Store"],
       dentist:["dental,office","Dentist"], doctors:["medical,clinic","Doctor"], clinic:["medical,clinic","Clinic"], optician:["eyewear,optical","Optician"],
       veterinary:["veterinary,animal","Veterinary"], childcare:["childcare,kids","Childcare"], kindergarten:["childcare,kids","Preschool"],
       lawyer:["law,office","Law Office"], insurance:["insurance,office","Insurance"], accountant:["accounting,office","Accountant"],
@@ -37,9 +39,10 @@ export default async function handler(req, res) {
     const R = radius;
     const q = '[out:json][timeout:14];('
       + 'node["shop"]["name"](around:'+R+','+lat+','+lng+');'
-      + 'node["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream|pharmacy|dentist|doctors|clinic|veterinary|childcare|kindergarten|funeral_hall"]["name"](around:'+R+','+lat+','+lng+');'
+      + 'node["amenity"~"restaurant|cafe|bar|pub|bakery|fast_food|ice_cream|pharmacy|dentist|doctors|clinic|veterinary|childcare|kindergarten|funeral_hall|funeral_directors"]["name"](around:'+R+','+lat+','+lng+');'
       + 'node["office"~"lawyer|insurance|accountant|estate_agent|financial|travel_agent"]["name"](around:'+R+','+lat+','+lng+');'
-      + ');out 150;';
+      + 'node["craft"~"stonemason"]["name"](around:'+R+','+lat+','+lng+');'
+      + ');out 180;';
     const eps = ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter"];
 
     let j = null;
@@ -59,26 +62,31 @@ export default async function handler(req, res) {
     }
     if (!j || !j.elements) return res.status(200).json({ town, sponsors: [] });
 
+    const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
+    const FUNERAL = { funeral_directors:1, funeral_hall:1, florist:1, monuments:1, gravestone:1, stonemason:1 };
+    const isFuneral = (t) => !!FUNERAL[typeOf(t)];
     const webOf = (t) => (t.website || t["contact:website"] || t.url || "").trim();
     const hasWeb = (t) => !!webOf(t);
     const isChain = (t) => !!(t.brand || t["brand:wikidata"] || CHAINS.test(t.name || ""));
     const cityOf = (t) => norm(t["addr:city"] || t["addr:suburb"] || t["addr:neighbourhood"]);
     const inScope = (t) => {
+      if (isFuneral(t)) return true; // funeral services serve nearby towns too — allow within radius
       if (!townSet.length) return true;
       const c = cityOf(t);
       if (!c) return true;
       return townSet.includes(c);
     };
+    // TRIAL RULE: non-funeral sponsors must have a real website; funeral services are exempt (Option A)
+    const keep = (t) => isFuneral(t) || hasWeb(t);
     const homeScore = (t) => { const c = cityOf(t); if (!c) return 1; return c === homeT ? 2 : 0; };
-    const prio = (t) => { const ty = (t.shop || t.amenity || t.office || "").toLowerCase(); return (ty === "funeral_directors" || ty === "funeral_hall" || ty === "florist") ? 1 : 0; };
-    const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
+    const prio = (t) => (isFuneral(t) ? 1 : 0);
 
-    // TRIAL RULE: only businesses with a real, direct website may appear as sponsors
-    let named = j.elements.filter((e) => e && e.tags && e.tags.name && hasWeb(e.tags) && !isChain(e.tags) && inScope(e.tags));
-    if (named.length < 3) named = j.elements.filter((e) => e && e.tags && e.tags.name && hasWeb(e.tags) && !isChain(e.tags));
+    let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && keep(e.tags) && inScope(e.tags));
+    if (named.length < 3) named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && keep(e.tags));
     named.sort((a, b) =>
-      (homeScore(b.tags) - homeScore(a.tags)) ||
       (prio(b.tags) - prio(a.tags)) ||
+      (homeScore(b.tags) - homeScore(a.tags)) ||
+      ((hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0)) ||
       (norm(a.tags.name) < norm(b.tags.name) ? -1 : 1)
     );
 
@@ -92,12 +100,14 @@ export default async function handler(req, res) {
         const meta = cats[type] || ["storefront,shop", cap((type || "shop").replace(/_/g, " "))];
         const cityLabel = cap(t["addr:city"] || t["addr:suburb"] || town);
         let web = webOf(t);
-        if (!/^https?:\/\//i.test(web)) web = "https://" + web;
+        const direct = !!web;
+        if (web && !/^https?:\/\//i.test(web)) web = "https://" + web;
+        if (!web) web = "https://www.google.com/search?q=" + encodeURIComponent(name + " " + cityLabel + " " + st);
         let lock = 0; for (let i = 0; i < name.length; i++) lock = (lock * 31 + name.charCodeAt(i)) % 9999;
         picks.push({
           biz: name, tag: meta[1] + " · " + cityLabel,
-          body: "A local " + meta[1].toLowerCase() + " in " + cityLabel + ". Tap to visit their website.",
-          pic: meta[0], lock, cta: "Visit website", url: web,
+          body: "A local " + meta[1].toLowerCase() + " serving " + cityLabel + " families. Tap for details.",
+          pic: meta[0], lock, cta: direct ? "Visit website" : "View business", url: web,
         });
         seenName[name] = 1; seenType[type] = 1;
         if (picks.length >= 12) break;
