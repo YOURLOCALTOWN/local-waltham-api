@@ -4,6 +4,7 @@ const VERIFIED = [
     towns: ["waltham", "watertown", "belmont", "newton", "lexington", "weston", "lincoln"],
     biz: "Brasco & Sons Memorial Chapels",
     cat: "Funeral Home", pic: "flowers,memorial", city: "Waltham",
+    img: "https://d1q40j6jx1d8h6.cloudfront.net/SiteBuilder/d0f4f4ab-ec8d-4194-b491-3401ec724783/63b6247e-8313-434b-9381-b0201c04ed08.webp",
     url: "https://www.brascofuneralhome.com",
   },
 ];
@@ -31,7 +32,7 @@ export default async function handler(req, res) {
       .filter((v) => v.towns.includes(homeT) || v.towns.some((t) => townSet.includes(t)))
       .map((v) => {
         let lock = 0; for (let i = 0; i < v.biz.length; i++) lock = (lock * 31 + v.biz.charCodeAt(i)) % 9999;
-        return { biz: v.biz, tag: v.cat + " · " + v.city, body: "A local " + v.cat.toLowerCase() + " serving " + v.city + " families. Tap for details.", pic: v.pic, lock, cta: "Visit website", url: v.url, verified: true };
+        return { biz: v.biz, tag: v.cat + " · " + v.city, body: "A local " + v.cat.toLowerCase() + " serving " + v.city + " families. Tap for details.", pic: v.pic, img: v.img || null, lock, cta: "Visit website", url: v.url, verified: true };
       });
 
     const cats = {
