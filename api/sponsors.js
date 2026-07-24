@@ -1,3 +1,13 @@
+// Verified sponsors you control (always shown first for their towns). Add real advertisers here.
+const VERIFIED = [
+  {
+    towns: ["waltham", "watertown", "belmont", "newton", "lexington", "weston", "lincoln"],
+    biz: "Brasco & Sons Memorial Chapels",
+    cat: "Funeral Home", pic: "flowers,memorial", city: "Waltham",
+    url: "https://www.brascofuneralhome.com",
+  },
+];
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET");
@@ -15,6 +25,14 @@ export default async function handler(req, res) {
     const norm = (s) => (s || "").trim().toLowerCase();
     const townSet = (req.query.towns || town).toString().split("|").map(norm).filter(Boolean);
     const homeT = norm(town);
+
+    // verified sponsors that serve this town
+    const verifiedPicks = VERIFIED
+      .filter((v) => v.towns.includes(homeT) || v.towns.some((t) => townSet.includes(t)))
+      .map((v) => {
+        let lock = 0; for (let i = 0; i < v.biz.length; i++) lock = (lock * 31 + v.biz.charCodeAt(i)) % 9999;
+        return { biz: v.biz, tag: v.cat + " · " + v.city, body: "A local " + v.cat.toLowerCase() + " serving " + v.city + " families. Tap for details.", pic: v.pic, lock, cta: "Visit website", url: v.url, verified: true };
+      });
 
     const cats = {
       bakery:["bakery,pastry","Bakery"], cafe:["cafe,coffee","Cafe"], coffee:["cafe,coffee","Coffee"],
@@ -60,7 +78,7 @@ export default async function handler(req, res) {
         if (r.ok) { j = await r.json(); break; }
       } catch (e) {}
     }
-    if (!j || !j.elements) return res.status(200).json({ town, sponsors: [] });
+    if (!j || !j.elements) return res.status(200).json({ town, sponsors: verifiedPicks });
 
     const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
     const FUNERAL = { funeral_directors:1, funeral_hall:1, florist:1, monuments:1, gravestone:1, stonemason:1 };
@@ -70,13 +88,12 @@ export default async function handler(req, res) {
     const isChain = (t) => !!(t.brand || t["brand:wikidata"] || CHAINS.test(t.name || ""));
     const cityOf = (t) => norm(t["addr:city"] || t["addr:suburb"] || t["addr:neighbourhood"]);
     const inScope = (t) => {
-      if (isFuneral(t)) return true; // funeral services serve nearby towns too — allow within radius
+      if (isFuneral(t)) return true;
       if (!townSet.length) return true;
       const c = cityOf(t);
       if (!c) return true;
       return townSet.includes(c);
     };
-    // TRIAL RULE: non-funeral sponsors must have a real website; funeral services are exempt (Option A)
     const keep = (t) => isFuneral(t) || hasWeb(t);
     const homeScore = (t) => { const c = cityOf(t); if (!c) return 1; return c === homeT ? 2 : 0; };
     const prio = (t) => (isFuneral(t) ? 1 : 0);
@@ -90,11 +107,12 @@ export default async function handler(req, res) {
       (norm(a.tags.name) < norm(b.tags.name) ? -1 : 1)
     );
 
-    const seenName = {}, seenType = {}, picks = [];
+    const seenName = {}; verifiedPicks.forEach((v) => { seenName[norm(v.biz)] = 1; });
+    const seenType = {}, picks = [];
     for (const pass of [1, 2]) {
       for (const el of named) {
         const t = el.tags, name = t.name;
-        if (seenName[name]) continue;
+        if (seenName[norm(name)]) continue;
         const type = typeOf(t);
         if (pass === 1 && seenType[type]) continue;
         const meta = cats[type] || ["storefront,shop", cap((type || "shop").replace(/_/g, " "))];
@@ -109,14 +127,15 @@ export default async function handler(req, res) {
           body: "A local " + meta[1].toLowerCase() + " serving " + cityLabel + " families. Tap for details.",
           pic: meta[0], lock, cta: direct ? "Visit website" : "View business", url: web,
         });
-        seenName[name] = 1; seenType[type] = 1;
+        seenName[norm(name)] = 1; seenType[type] = 1;
         if (picks.length >= 12) break;
       }
       if (picks.length >= 12) break;
     }
 
+    const sponsors = verifiedPicks.concat(picks).slice(0, 12);
     res.setHeader("Cache-Control", "s-maxage=86400, stale-while-revalidate=604800");
-    return res.status(200).json({ town, sponsors: picks });
+    return res.status(200).json({ town, sponsors });
   } catch (e) {
     return res.status(200).json({ town, sponsors: [], error: String(e) });
   }
