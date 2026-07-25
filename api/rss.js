@@ -10,14 +10,18 @@ const STATES = {
   WI:"wisconsin",WY:"wyoming",DC:"washington-dc",
 };
 
-// decode entities FIRST, then strip tags (twice), then drop leftover URLs
+// sites that publish undated schedule/listing pages — never real "news"
+const BLOCK = /(maxpreps|eventbrite|yelp\.com|tripadvisor|zillow|realtor\.com|redfin|indeed\.com|ziprecruiter)/i;
+
+// decode entities FIRST, then strip tags, then drop URLs and dangling fragments
 const strip = (s) => {
   let t = (s || "").replace(/<!\[CDATA\[|\]\]>/g, "");
   t = t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
        .replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&nbsp;/g, " ")
        .replace(/&amp;/g, "&");
-  t = t.replace(/<[^>]*>/g, " ").replace(/<[^>]*>/g, " ");
+  t = t.replace(/<[^>]*>/g, " ").replace(/<[^>]*>/g, " ").replace(/<[^>]*$/, " ");
   t = t.replace(/https?:\/\/\S+/g, " ");
+  t = t.replace(/\s*<\s*\/?\s*[a-z]*\s*(href|src)?\s*=?\s*["']?\s*$/i, " ");
   return t.replace(/\s+/g, " ").trim();
 };
 
@@ -32,22 +36,33 @@ function parseRSS(xml, source) {
     };
     const title = get("title");
     if (!title) continue;
+
     let link = "";
     const lm = chunk.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
     if (lm) link = lm[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim();
     if (!link) { const m = chunk.match(/<link[^>]*href="([^"]+)"/i); if (m) link = m[1]; }
+
+    // reject schedule/listing sites by title or link
+    if (BLOCK.test(title) || BLOCK.test(link) || BLOCK.test(chunk.slice(0, 900))) continue;
+
+    // require a REAL publish date — no date means we can't trust "x days ago"
     const dateStr = get("pubDate") || get("updated") || get("published") || get("dc:date");
     const t = dateStr ? Date.parse(dateStr) : NaN;
+    if (isNaN(t)) continue;
+    if (t > Date.now() + 864e5) continue;              // no future-dated items
+    if (t < Date.now() - 60 * 864e5) continue;          // nothing older than 60 days
+
     let thumb = null;
     const mt = chunk.match(/<media:(?:thumbnail|content)[^>]*url="([^"]+)"/i) || chunk.match(/<enclosure[^>]*url="([^"]+\.(?:jpg|jpeg|png|webp))"/i);
     if (mt) thumb = mt[1];
+
     out.push({
       id: "rss_" + Math.abs([...title].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7)),
       title,
       url: link,
       selftext: get("description").slice(0, 220),
       author: source,
-      created: isNaN(t) ? Math.floor(Date.now() / 1000) : Math.floor(t / 1000),
+      created: Math.floor(t / 1000),
       thumb,
     });
   }
