@@ -10,12 +10,16 @@ const STATES = {
   WI:"wisconsin",WY:"wyoming",DC:"washington-dc",
 };
 
-const strip = (s) => (s || "")
-  .replace(/<!\[CDATA\[|\]\]>/g, "")
-  .replace(/<[^>]+>/g, "")
-  .replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"')
-  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
-  .trim();
+// decode entities FIRST, then strip tags (twice), then drop leftover URLs
+const strip = (s) => {
+  let t = (s || "").replace(/<!\[CDATA\[|\]\]>/g, "");
+  t = t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+       .replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&nbsp;/g, " ")
+       .replace(/&amp;/g, "&");
+  t = t.replace(/<[^>]*>/g, " ").replace(/<[^>]*>/g, " ");
+  t = t.replace(/https?:\/\/\S+/g, " ");
+  return t.replace(/\s+/g, " ").trim();
+};
 
 function parseRSS(xml, source) {
   const out = [];
@@ -28,7 +32,9 @@ function parseRSS(xml, source) {
     };
     const title = get("title");
     if (!title) continue;
-    let link = get("link");
+    let link = "";
+    const lm = chunk.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
+    if (lm) link = lm[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim();
     if (!link) { const m = chunk.match(/<link[^>]*href="([^"]+)"/i); if (m) link = m[1]; }
     const dateStr = get("pubDate") || get("updated") || get("published") || get("dc:date");
     const t = dateStr ? Date.parse(dateStr) : NaN;
@@ -37,8 +43,9 @@ function parseRSS(xml, source) {
     if (mt) thumb = mt[1];
     out.push({
       id: "rss_" + Math.abs([...title].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7)),
-      title, url: link,
-      selftext: get("description").slice(0, 300),
+      title,
+      url: link,
+      selftext: get("description").slice(0, 220),
       author: source,
       created: isNaN(t) ? Math.floor(Date.now() / 1000) : Math.floor(t / 1000),
       thumb,
