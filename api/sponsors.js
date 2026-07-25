@@ -12,7 +12,7 @@ const VERIFIED = [
             "holts summit", "st. martins", "saint martins", "westphalia", "belle", "owensville",
             "vienna", "bland", "meta", "freeburg", "loose creek", "taos", "wardsville", "centertown"],
     biz: "Millard Family Chapels",
-    cat: "Funeral Home", pic: "flowers,memorial", city: "Missouri",
+    cat: "Funeral Home", pic: "flowers,memorial", city: "",
     img: "https://local-waltham-api.vercel.app/millard-logo.png",
     url: "https://www.millardfamilychapels.com",
   },
@@ -33,15 +33,25 @@ export default async function handler(req, res) {
     radius = Math.min(80000, Math.max(3000, radius));
 
     const norm = (s) => (s || "").trim().toLowerCase();
+    const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
     const townSet = (req.query.towns || town).toString().split("|").map(norm).filter(Boolean);
     const homeT = norm(town);
+
+    // copy: a business IN this town serves it + neighbors; one nearby serves this town too
+    const blurb = (kind, city, isHome) => {
+      const k = (kind || "business").toLowerCase();
+      return isHome
+        ? "A local " + k + " in " + city + ", serving " + city + " and surrounding areas."
+        : "A local " + k + " in " + city + ", serving " + (town || "the area") + " and nearby towns.";
+    };
 
     const verifiedPicks = VERIFIED
       .filter((v) => v.towns.includes(homeT) || v.towns.some((t) => townSet.includes(t)))
       .map((v) => {
         let lock = 0; for (let i = 0; i < v.biz.length; i++) lock = (lock * 31 + v.biz.charCodeAt(i)) % 9999;
-        const city = v.city === "Missouri" ? (town || v.city) : v.city;
-        return { biz: v.biz, tag: v.cat + " · " + city, body: "A local " + v.cat.toLowerCase() + " serving " + city + " families. Tap for details.", pic: v.pic, img: v.img || null, lock, cta: "Visit website", url: v.url, verified: true };
+        const city = v.city || cap(town);
+        const isHome = norm(city) === homeT;
+        return { biz: v.biz, tag: v.cat + " · " + city, body: blurb(v.cat, city, isHome), pic: v.pic, img: v.img || null, lock, cta: "Visit website", url: v.url, verified: true };
       });
 
     const cats = {
@@ -55,13 +65,13 @@ export default async function handler(req, res) {
       car_repair:["auto,garage","Auto Repair"], car:["car,dealer","Auto"], tyres:["tires,auto","Tire Shop"], gym:["gym,fitness","Fitness"],
       funeral_directors:["flowers,memorial","Funeral Home"], funeral_hall:["flowers,memorial","Funeral Home"],
       monuments:["monument,headstone","Headstones"], gravestone:["monument,headstone","Headstones"], stonemason:["monument,headstone","Monument Maker"],
-      pet:["pet,supplies","Pet Store"], toys:["toys,store","Toy Store"],
+      pet:["pet,supplies","Pet Store"], toys:["toys,store","Toy Store"], carpet:["rugs,home","Rugs & Carpet"], furniture:["furniture,home","Furniture"],
+      confectionery:["dessert,sweets","Sweets"], alcohol:["wine,spirits","Wine & Spirits"], hifi:["electronics","Electronics"],
       dentist:["dental,office","Dentist"], doctors:["medical,clinic","Doctor"], clinic:["medical,clinic","Clinic"], optician:["eyewear,optical","Optician"],
       veterinary:["veterinary,animal","Veterinary"], childcare:["childcare,kids","Childcare"], kindergarten:["childcare,kids","Preschool"],
       lawyer:["law,office","Law Office"], insurance:["insurance,office","Insurance"], accountant:["accounting,office","Accountant"],
       estate_agent:["real estate,office","Real Estate"], financial:["finance,office","Financial"], travel_agent:["travel,agency","Travel"],
     };
-    const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
     const CHAINS = /(mcdonald|starbucks|dunkin|subway|burger king|wendy|domino|pizza hut|taco bell|kfc|chipotle|panera|five guys|chick-fil|popeyes|arby|cvs|walgreens|rite aid|walmart|target|costco|home depot|7-?eleven|circle k|shell|mobil|exxon|citgo|sunoco|bank of america|chase|wells fargo|citizens bank|td bank|santander|dollar |family dollar|gamestop|verizon|t-mobile|planet fitness|ups store|fedex|autozone|advance auto|jiffy lube|supercuts|great clips|petco|petsmart|staples|marshalls|old navy|panda express|wingstop|jersey mike|sonic|dairy queen|baskin|cumberland farms|stop & shop|midas|meineke|firestone|jackson hewitt|h&r block|geico|state farm|allstate|edward jones)/i;
 
     const R = radius;
@@ -111,8 +121,8 @@ export default async function handler(req, res) {
     let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && keep(e.tags) && inScope(e.tags));
     if (named.length < 3) named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && keep(e.tags));
     named.sort((a, b) =>
-      (prio(b.tags) - prio(a.tags)) ||
       (homeScore(b.tags) - homeScore(a.tags)) ||
+      (prio(b.tags) - prio(a.tags)) ||
       ((hasWeb(b.tags) ? 1 : 0) - (hasWeb(a.tags) ? 1 : 0)) ||
       (norm(a.tags.name) < norm(b.tags.name) ? -1 : 1)
     );
@@ -126,17 +136,24 @@ export default async function handler(req, res) {
         const type = typeOf(t);
         if (pass === 1 && seenType[type]) continue;
         const meta = cats[type] || ["storefront,shop", cap((type || "shop").replace(/_/g, " "))];
-        const cityLabel = cap(t["addr:city"] || t["addr:suburb"] || town);
+
+        // only claim a town we actually know; never assume the searched town
+        const realCity = t["addr:city"] || t["addr:suburb"] || t["addr:neighbourhood"] || "";
+        const cityLabel = realCity ? cap(realCity) : "";
+        const isHome = cityLabel && norm(cityLabel) === homeT;
+
         let web = webOf(t);
         const direct = !!web;
         if (web && !/^https?:\/\//i.test(web)) web = "https://" + web;
-        if (!web) web = "https://www.google.com/search?q=" + encodeURIComponent(name + " " + cityLabel + " " + st);
+        if (!web) web = "https://www.google.com/search?q=" + encodeURIComponent(name + " " + (cityLabel || town) + " " + st);
         let lock = 0; for (let i = 0; i < name.length; i++) lock = (lock * 31 + name.charCodeAt(i)) % 9999;
-        picks.push({
-          biz: name, tag: meta[1] + " · " + cityLabel,
-          body: "A local " + meta[1].toLowerCase() + " serving " + cityLabel + " families. Tap for details.",
-          pic: meta[0], lock, cta: direct ? "Visit website" : "View business", url: web,
-        });
+
+        const tag = cityLabel ? (meta[1] + " · " + cityLabel) : (meta[1] + " · Near " + cap(town));
+        const body = cityLabel
+          ? blurb(meta[1], cityLabel, isHome)
+          : "A local " + meta[1].toLowerCase() + " serving " + cap(town) + " and surrounding areas.";
+
+        picks.push({ biz: name, tag, body, pic: meta[0], lock, cta: direct ? "Visit website" : "View business", url: web });
         seenName[norm(name)] = 1; seenType[type] = 1;
         if (picks.length >= 12) break;
       }
