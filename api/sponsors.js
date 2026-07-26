@@ -33,11 +33,11 @@ export default async function handler(req, res) {
     radius = Math.min(80000, Math.max(3000, radius));
 
     const norm = (s) => (s || "").trim().toLowerCase();
+    const nkey = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
     const cap = (s) => (s || "").replace(/\b\w/g, (c) => c.toUpperCase());
     const townSet = (req.query.towns || town).toString().split("|").map(norm).filter(Boolean);
     const homeT = norm(town);
 
-    // copy: a business IN this town serves it + neighbors; one nearby serves this town too
     const blurb = (kind, city, isHome) => {
       const k = (kind || "business").toLowerCase();
       return isHome
@@ -98,7 +98,11 @@ export default async function handler(req, res) {
         if (r.ok) { j = await r.json(); break; }
       } catch (e) {}
     }
-    if (!j || !j.elements) return res.status(200).json({ town, sponsors: verifiedPicks });
+
+    const fresh = String(req.query.refresh || "") === "ylt2026";
+    const setCache = () => res.setHeader("Cache-Control", fresh ? "no-store" : "s-maxage=3600, stale-while-revalidate=86400");
+
+    if (!j || !j.elements) { setCache(); return res.status(200).json({ town, sponsors: verifiedPicks }); }
 
     const typeOf = (t) => (t.shop || t.amenity || t.office || t.craft || t.healthcare || "").toLowerCase();
     const FUNERAL = { funeral_directors:1, funeral_hall:1, florist:1, monuments:1, gravestone:1, stonemason:1 };
@@ -117,9 +121,23 @@ export default async function handler(req, res) {
     const keep = (t) => isFuneral(t) || hasWeb(t);
     const homeScore = (t) => { const c = cityOf(t); if (!c) return 1; return c === homeT ? 2 : 0; };
     const prio = (t) => (isFuneral(t) ? 1 : 0);
+    const known = (t) => (cats[typeOf(t)] ? 1 : 0);
 
     let named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && keep(e.tags) && inScope(e.tags));
     if (named.length < 3) named = j.elements.filter((e) => e && e.tags && e.tags.name && !isChain(e.tags) && keep(e.tags));
+
+    // collapse punctuation/spacing variants of the same business ("Adi's" vs "Adis")
+    const byKey = {};
+    for (const el of named) {
+      const k = nkey(el.tags.name);
+      if (!k) continue;
+      const cur = byKey[k];
+      if (!cur) { byKey[k] = el; continue; }
+      const score = (e) => (hasWeb(e.tags) ? 4 : 0) + (known(e.tags) ? 2 : 0) + (cityOf(e.tags) ? 1 : 0);
+      if (score(el) > score(cur)) byKey[k] = el;
+    }
+    named = Object.values(byKey);
+
     named.sort((a, b) =>
       (homeScore(b.tags) - homeScore(a.tags)) ||
       (prio(b.tags) - prio(a.tags)) ||
@@ -127,17 +145,16 @@ export default async function handler(req, res) {
       (norm(a.tags.name) < norm(b.tags.name) ? -1 : 1)
     );
 
-    const seenName = {}; verifiedPicks.forEach((v) => { seenName[norm(v.biz)] = 1; });
+    const seenName = {}; verifiedPicks.forEach((v) => { seenName[nkey(v.biz)] = 1; });
     const seenType = {}, picks = [];
     for (const pass of [1, 2]) {
       for (const el of named) {
         const t = el.tags, name = t.name;
-        if (seenName[norm(name)]) continue;
+        if (seenName[nkey(name)]) continue;
         const type = typeOf(t);
         if (pass === 1 && seenType[type]) continue;
         const meta = cats[type] || ["storefront,shop", cap((type || "shop").replace(/_/g, " "))];
 
-        // only claim a town we actually know; never assume the searched town
         const realCity = t["addr:city"] || t["addr:suburb"] || t["addr:neighbourhood"] || "";
         const cityLabel = realCity ? cap(realCity) : "";
         const isHome = cityLabel && norm(cityLabel) === homeT;
@@ -154,14 +171,14 @@ export default async function handler(req, res) {
           : "A local " + meta[1].toLowerCase() + " serving " + cap(town) + " and surrounding areas.";
 
         picks.push({ biz: name, tag, body, pic: meta[0], lock, cta: direct ? "Visit website" : "View business", url: web });
-        seenName[norm(name)] = 1; seenType[type] = 1;
+        seenName[nkey(name)] = 1; seenType[type] = 1;
         if (picks.length >= 12) break;
       }
       if (picks.length >= 12) break;
     }
 
     const sponsors = verifiedPicks.concat(picks).slice(0, 12);
-    res.setHeader("Cache-Control", "s-maxage=86400, stale-while-revalidate=604800");
+    setCache();
     return res.status(200).json({ town, sponsors });
   } catch (e) {
     return res.status(200).json({ town, sponsors: [], error: String(e) });
