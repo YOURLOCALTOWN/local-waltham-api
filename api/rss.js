@@ -23,6 +23,13 @@ const strip = (s) => {
   return t.replace(/\s+/g, " ").trim();
 };
 
+const junkTitle = (title) => {
+  if (/\bschedule\b|\broster\b|\bstandings\b|\bscoreboard\b/i.test(title)) return true;
+  if (/\bweek\s*\d+\b/i.test(title) && /\b(am|pm|complex|schedule|tryout)\b/i.test(title)) return true;
+  if (/\sEvents\s*[-–—]\s/i.test(title)) return true;
+  return false;
+};
+
 function parseRSS(xml, source) {
   const out = [];
   const blocks = xml.split(/<item[\s>]/i).slice(1);
@@ -40,7 +47,7 @@ function parseRSS(xml, source) {
     if (lm) link = lm[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim();
     if (!link) { const m = chunk.match(/<link[^>]*href="([^"]+)"/i); if (m) link = m[1]; }
     if (BLOCK.test(title) || BLOCK.test(link)) continue;
-    if (/\bschedule\b|\broster\b|\bstandings\b/i.test(title)) continue;
+    if (junkTitle(title)) continue;
 
     const dateStr = get("pubDate") || get("updated") || get("published") || get("dc:date");
     const t = dateStr ? Date.parse(dateStr) : NaN;
@@ -49,8 +56,16 @@ function parseRSS(xml, source) {
     if (t < Date.now() - 60 * 864e5) continue;
 
     let thumb = null;
-    const mt = chunk.match(/<media:(?:thumbnail|content)[^>]*url="([^"]+)"/i) || chunk.match(/<enclosure[^>]*url="([^"]+\.(?:jpg|jpeg|png|webp))"/i);
+    const mt = chunk.match(/<media:(?:thumbnail|content)[^>]*url="([^"]+)"/i)
+            || chunk.match(/<enclosure[^>]*url="([^"]+\.(?:jpg|jpeg|png|webp))"/i);
     if (mt) thumb = mt[1];
+    if (!thumb) {
+      const raw = chunk.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
+      const im = raw.match(/<img[^>]+src=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/i);
+      if (im) thumb = im[1];
+    }
+    if (thumb && thumb.startsWith("//")) thumb = "https:" + thumb;
+    if (thumb && !/^https?:/i.test(thumb)) thumb = null;
 
     out.push({
       id: "rss_" + Math.abs([...title].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7)),
@@ -75,6 +90,31 @@ async function grab(url, source, ms) {
     if (!/<item[\s>]/i.test(xml)) return [];
     return parseRSS(xml, source);
   } catch (e) { return []; }
+}
+
+// pull an article's own preview image (og:image) — Google News RSS carries none
+async function ogImage(url, ms) {
+  if (!url) return null;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms || 2600);
+    const r = await fetch(url, {
+      signal: ctrl.signal, redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36" },
+    });
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    const html = (await r.text()).slice(0, 120000);
+    const m = html.match(/<meta[^>]+(?:property|name)=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i)
+           || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']og:image["']/i)
+           || html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i);
+    if (!m) return null;
+    let u = m[1].trim().replace(/&amp;/g, "&");
+    if (u.startsWith("//")) u = "https:" + u;
+    if (!/^https?:\/\//i.test(u)) return null;
+    if (/\.svg($|\?)/i.test(u)) return null;
+    return u;
+  } catch (e) { return null; }
 }
 
 export default async function handler(req, res) {
@@ -127,6 +167,10 @@ export default async function handler(req, res) {
       }
     });
     posts.sort((a, b) => (b.created || 0) - (a.created || 0));
+
+    // enrich the newest stories with their real preview images
+    const need = posts.slice(0, 26).filter((p) => !p.thumb).slice(0, 16);
+    await Promise.allSettled(need.map(async (p) => { const u = await ogImage(p.url, 2600); if (u) p.thumb = u; }));
 
     res.setHeader("Cache-Control", "s-maxage=900, stale-while-revalidate=3600");
     return res.status(200).json({ town, sources: working.length, posts: posts.slice(0, 100) });
