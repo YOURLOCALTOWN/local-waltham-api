@@ -30,6 +30,22 @@ const junkTitle = (title) => {
   return false;
 };
 
+// Google News links are redirect shells — dig out the publisher's real URL
+function realUrl(u) {
+  const s = String(u || "");
+  if (!/news\.google\.com/i.test(s)) return s;
+  try {
+    const m = s.match(/\/articles\/([A-Za-z0-9_\-]{20,})/);
+    if (!m) return s;
+    let b = m[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (b.length % 4) b += "=";
+    const dec = Buffer.from(b, "base64").toString("latin1");
+    const um = dec.match(/https?:\/\/[A-Za-z0-9._~:\/?#\[\]@!$&'()*+,;=%-]{12,}/);
+    if (um) return um[0].replace(/[^A-Za-z0-9\/\-_.~%?=&]+$/, "");
+  } catch (e) {}
+  return s;
+}
+
 function parseRSS(xml, source) {
   const out = [];
   const blocks = xml.split(/<item[\s>]/i).slice(1);
@@ -46,6 +62,16 @@ function parseRSS(xml, source) {
     const lm = chunk.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
     if (lm) link = lm[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim();
     if (!link) { const m = chunk.match(/<link[^>]*href="([^"]+)"/i); if (m) link = m[1]; }
+
+    // Google News puts the publisher's link inside the description
+    const rawDesc = (chunk.match(/<description[^>]*>([\s\S]*?)<\/description>/i) || [])[1] || "";
+    const un = rawDesc.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+    const hrefs = (un.match(/href="https?:\/\/[^"]+"/gi) || [])
+      .map((h) => h.slice(6, -1))
+      .filter((u) => !/news\.google\.com|google\.com\/url/i.test(u));
+    if (hrefs.length) link = hrefs[0];
+    else link = realUrl(link);
+
     if (BLOCK.test(title) || BLOCK.test(link)) continue;
     if (junkTitle(title)) continue;
 
@@ -60,9 +86,8 @@ function parseRSS(xml, source) {
             || chunk.match(/<enclosure[^>]*url="([^"]+\.(?:jpg|jpeg|png|webp))"/i);
     if (mt) thumb = mt[1];
     if (!thumb) {
-      const raw = chunk.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
-      const im = raw.match(/<img[^>]+src=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/i);
-      if (im) thumb = im[1];
+      const im = un.match(/<img[^>]+src=["']([^"']+)["']/i);
+      if (im && /^https?:/i.test(im[1]) && !/google/i.test(im[1])) thumb = im[1];
     }
     if (thumb && thumb.startsWith("//")) thumb = "https:" + thumb;
     if (thumb && !/^https?:/i.test(thumb)) thumb = null;
@@ -92,19 +117,23 @@ async function grab(url, source, ms) {
   } catch (e) { return []; }
 }
 
-// pull an article's own preview image (og:image) — Google News RSS carries none
+// pull an article's own preview image (og:image)
 async function ogImage(url, ms) {
-  if (!url) return null;
+  const target = realUrl(url);
+  if (!target || /news\.google\.com/i.test(target)) return null;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), ms || 2600);
-    const r = await fetch(url, {
+    const r = await fetch(target, {
       signal: ctrl.signal, redirect: "follow",
-      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36" },
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+      },
     });
     clearTimeout(timer);
     if (!r.ok) return null;
-    const html = (await r.text()).slice(0, 120000);
+    const html = (await r.text()).slice(0, 150000);
     const m = html.match(/<meta[^>]+(?:property|name)=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i)
            || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']og:image["']/i)
            || html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i);
@@ -133,11 +162,8 @@ export default async function handler(req, res) {
     const gq = (q) => "https://news.google.com/rss/search?q=" + encodeURIComponent(q) + "&hl=en-US&gl=US&ceid=US:en";
 
     const sources = [];
-
-    // 1. Patch (town page)
     if (stateSlug) sources.push([`https://patch.com/${stateSlug}/${slug}/rss`, "Patch"]);
 
-    // 2. common town-government / police / school RSS patterns
     const govHosts = [
       `https://www.${flat}ma.gov`, `https://www.${slug}-${stl}.gov`, `https://www.${flat}.gov`,
       `https://www.city.${flat}.${stl}.us`, `https://www.town.${flat}.${stl}.us`, `https://www.${flat}.org`,
@@ -145,7 +171,6 @@ export default async function handler(req, res) {
     const govPaths = ["/RSSFeed.aspx?ModID=1&CID=All", "/rss.xml", "/feed", "/news/rss", "/CivicAlerts.aspx?AID=&ARC=RSS"];
     for (const h of govHosts.slice(0, 3)) for (const p of govPaths.slice(0, 3)) sources.push([h + p, "Town of " + town]);
 
-    // 3. Google News scoped to real local outlets and civic sources
     sources.push([gq(`"${town}" ${st} when:30d`), "Local News"]);
     sources.push([gq(`"${town}" ${st} (police OR fire OR "police log" OR arrested OR "structure fire") when:30d`), "Police & Fire"]);
     sources.push([gq(`"${town}" ${st} ("school committee" OR "public schools" OR superintendent OR "town meeting" OR "city council") when:30d`), "Local News"]);
@@ -169,7 +194,7 @@ export default async function handler(req, res) {
     posts.sort((a, b) => (b.created || 0) - (a.created || 0));
 
     // enrich the newest stories with their real preview images
-    const need = posts.slice(0, 26).filter((p) => !p.thumb).slice(0, 16);
+    const need = posts.slice(0, 24).filter((p) => !p.thumb).slice(0, 14);
     await Promise.allSettled(need.map(async (p) => { const u = await ogImage(p.url, 2600); if (u) p.thumb = u; }));
 
     res.setHeader("Cache-Control", "s-maxage=900, stale-while-revalidate=3600");
