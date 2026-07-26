@@ -55,9 +55,19 @@ export default async function handler(req, res) {
 
     const events = flat(await redis(["HGETALL", "stats:ev:" + T]));
     const users = (await redis(["SCARD", "stats:users:" + T])) || 0;
-    const sponsors = flat(await redis(["HGETALL", "stats:meta:" + T + ":sponsor_click"]));
+    const clicks = flat(await redis(["HGETALL", "stats:meta:" + T + ":sponsor_click"]));
+    const views = flat(await redis(["HGETALL", "stats:meta:" + T + ":sponsor_view"]));
+    const dirClicks = flat(await redis(["HGETALL", "stats:meta:" + T + ":directory_click"]));
     const filters = flat(await redis(["HGETALL", "stats:meta:" + T + ":filter"]));
     const tabs = flat(await redis(["HGETALL", "stats:meta:" + T + ":tab"]));
+
+    // advertiser report: views, clicks, click-through rate per business
+    const names = [...new Set([...Object.keys(views), ...Object.keys(clicks), ...Object.keys(dirClicks)])];
+    const advertisers = names.map((n) => {
+      const v = views[n] || 0;
+      const c = (clicks[n] || 0) + (dirClicks[n] || 0);
+      return { business: n, views: v, clicks: c, ctr: v ? Math.round((c / v) * 1000) / 10 + "%" : "—" };
+    }).sort((a, b) => (b.views - a.views) || (b.clicks - a.clicks));
 
     const days = {};
     for (let i = 0; i < 14; i++) {
@@ -67,7 +77,7 @@ export default async function handler(req, res) {
     }
 
     res.setHeader("Cache-Control", "no-store");
-    return res.status(200).json({ town, users, events, sponsors, filters, tabs, days });
+    return res.status(200).json({ town, users, events, advertisers, sponsors: clicks, filters, tabs, days });
   } catch (e) {
     return res.status(200).json({ ok: false, error: String(e) });
   }
