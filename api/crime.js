@@ -1,5 +1,4 @@
 // Recent local crime incidents from city open-data portals (free, no key).
-// Known portals are checked first; otherwise we search the national open-data catalog.
 const REGISTRY = {
   "chicago|il":       ["data.cityofchicago.org", "ijzp-q8t2"],
   "new york|ny":      ["data.cityofnewyork.us", "5uac-w243"],
@@ -14,6 +13,7 @@ const REGISTRY = {
   "new orleans|la":   ["data.nola.gov", "5fn8-vtui"],
   "hartford|ct":      ["data.hartford.gov", "889t-nwfu"],
   "baton rouge|la":   ["data.brla.gov", "6z2d-cfmi"],
+  "gainesville|fl":   ["data.cityofgainesville.org", "gvua-xt9q"],
   "montgomery|md":    ["data.montgomerycountymd.gov", "icn6-v9z3"],
 };
 
@@ -23,7 +23,8 @@ function sniff(rows) {
   const keys = Object.keys(rows[0] || {});
   const find = (re, skipCodes) => keys.find((k) => re.test(k) && (!skipCodes || !CODEY.test(k)));
   const dateK = keys.find((k) => /(^|_)(date|datetime)/i.test(k) && !isNaN(Date.parse(rows[0][k])))
-             || keys.find((k) => /(occur|report|start)/i.test(k) && !isNaN(Date.parse(rows[0][k])));
+             || keys.find((k) => /(occur|report|start)/i.test(k) && !isNaN(Date.parse(rows[0][k])))
+             || keys.find((k) => /(^|_)(date|datetime|occur|report)/i.test(k));
   const descK = find(/(desc|offense|offence|crime_?type|primary_?type|category|charge|nibrs|incident_?type)/i, true);
   const latK  = keys.find((k) => /^lat(itude)?$/i.test(k)) || keys.find((k) => /lat/i.test(k) && !CODEY.test(k));
   const lngK  = keys.find((k) => /^(lon|lng|long|longitude)$/i.test(k)) || keys.find((k) => /(lon|lng)/i.test(k) && !CODEY.test(k));
@@ -54,6 +55,19 @@ async function getJSON(url, ms) {
   } catch (e) { return null; }
 }
 
+// newest-first pull: peek at one row to learn the date column, then order by it
+async function pullRecent(domain, id) {
+  const base = "https://" + domain + "/resource/" + id + ".json";
+  const peek = await getJSON(base + "?$limit=1", 5000);
+  if (!Array.isArray(peek) || !peek.length) return null;
+  const f = sniff(peek);
+  if (f.dateK) {
+    const ordered = await getJSON(base + "?$limit=600&$order=" + encodeURIComponent(f.dateK) + "%20DESC", 7000);
+    if (Array.isArray(ordered) && ordered.length) return ordered;
+  }
+  return await getJSON(base + "?$limit=600", 7000);
+}
+
 function shape(rows, lat, lng, radiusMi) {
   if (!Array.isArray(rows) || !rows.length) return [];
   const f = sniff(rows);
@@ -71,7 +85,7 @@ function shape(rows, lat, lng, radiusMi) {
       la = parseFloat(r[f.geoK].coordinates[1]);
     }
     let dist = null;
-    if (!isNaN(la) && !isNaN(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180) {
+    if (!isNaN(la) && !isNaN(ln) && Math.abs(la) <= 90 && Math.abs(ln) <= 180 && (la !== 0 || ln !== 0)) {
       dist = miles(lat, lng, la, ln);
       if (dist > radiusMi) continue;
     } else { la = null; ln = null; }
@@ -111,18 +125,19 @@ export default async function handler(req, res) {
     const key = town.toLowerCase() + "|" + st.toLowerCase();
     const setCache = () => res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
 
-    // 1) known portal
+    // 1) this town's known portal
     const hit = REGISTRY[key];
     if (hit) {
-      const rows = await getJSON("https://" + hit[0] + "/resource/" + hit[1] + ".json?$limit=800", 7000);
+      const rows = await pullRecent(hit[0], hit[1]);
       const incidents = shape(rows, lat, lng, radiusMi);
       if (incidents.length) { setCache(); return res.status(200).json({ town, source: hit[0], incidents }); }
     }
 
-    // 2) search the national catalog for this city's own police-incident dataset
+    // 2) search the national catalog — a match only counts if the incidents
+    //    actually land near this town, so another city's data can never leak in
     const cat = await getJSON(
       "https://api.us.socrata.com/api/catalog/v1?only=dataset&limit=8&q=" +
-      encodeURIComponent(town + " police incidents crime"), 6000);
+      encodeURIComponent(town + " " + st + " police incidents crime"), 6000);
     const cands = ((cat && cat.results) || [])
       .filter((c) => {
         const n = ((c.resource && c.resource.name) || "").toLowerCase();
@@ -132,10 +147,10 @@ export default async function handler(req, res) {
       .slice(0, 3);
 
     for (const c of cands) {
-      const dom = c.metadata.domain, id = c.resource.id;
-      const rows = await getJSON("https://" + dom + "/resource/" + id + ".json?$limit=800", 6000);
+      const rows = await pullRecent(c.metadata.domain, c.resource.id);
       const incidents = shape(rows, lat, lng, radiusMi);
-      if (incidents.length >= 3) { setCache(); return res.status(200).json({ town, source: dom, incidents }); }
+      const mapped = incidents.filter((i) => i.lat != null).length;
+      if (mapped >= 3) { setCache(); return res.status(200).json({ town, source: c.metadata.domain, incidents }); }
     }
 
     setCache();
